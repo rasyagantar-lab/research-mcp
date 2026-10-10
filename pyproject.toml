@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "research-mcp"
+version = "0.1.0"
+description = "Local MCP server that lets Claude search the web and read web pages and PDFs."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "mcp>=2.3,<3",
+    "httpx2[brotli]>=2.13,<3",
+    "trafilatura>=2.3,<3",
+    "ddgs>=9.16,<10",
+    "pypdf[crypto]>=6.19,<7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/research_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = ["live: needs the internet; run with: pytest -m live"]
