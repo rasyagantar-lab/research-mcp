@@ -1,5 +1,8 @@
+import base64
+import hashlib
 import logging
 import os
+import re
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -9,8 +12,12 @@ from fakes import FakeSearch
 from mcp import Client, StdioServerParameters
 
 from research_mcp import server as server_module
+from research_mcp.config import load_settings
 from research_mcp.server import build_server
 from research_mcp.tools.search import SearchHit
+
+WEB_TOOLS = {"search_web", "read_webpage", "download_file"}
+DIAGNOSTIC_TOOLS = {"spike_image", "spike_image_structured", "spike_sleep"}
 
 
 @pytest.fixture
@@ -24,13 +31,23 @@ async def client(services):
 
 
 @pytest.mark.anyio
-async def test_lists_two_read_only_tools_without_output_schema(client):
+async def test_lists_the_tools_with_their_schemas_and_hints(client):
     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-    assert set(tools) == {"search_web", "read_webpage"}
+    assert set(tools) == WEB_TOOLS | DIAGNOSTIC_TOOLS
     for tool in tools.values():
-        assert tool.output_schema is None
-        assert tool.annotations.read_only_hint is True
         assert "ctx" not in tool.input_schema["properties"]
+        assert (tool.output_schema is None) == (tool.name != "spike_image_structured")
+    for name in ("search_web", "read_webpage", *DIAGNOSTIC_TOOLS):
+        assert tools[name].annotations.read_only_hint is True
+    download = tools["download_file"]
+    assert download.annotations.read_only_hint is False
+    assert download.annotations.destructive_hint is False
+    assert set(download.input_schema["properties"]) == {"url", "filename", "folder"}
+    assert download.input_schema["required"] == ["url"]
+    assert set(tools["spike_image_structured"].output_schema["properties"]) == {
+        "target_kb", "png_bytes", "base64_bytes", "width", "height", "sha256",
+    }
+    assert tools["spike_sleep"].input_schema["properties"]["seconds"]["maximum"] == server_module.SLEEP_MAX_SECONDS
     search_props = tools["search_web"].input_schema["properties"]
     assert set(search_props) == {"query", "max_results", "recency", "region"}
     assert search_props["recency"]["enum"] == ["any", "day", "week", "month", "year"]
@@ -56,6 +73,63 @@ async def test_read_webpage_through_mcp(client, site):
     result = await client.call_tool("read_webpage", {"url": site.url("/")})
     assert result.is_error is False
     assert "title: Home" in result.content[0].text
+
+
+@pytest.mark.anyio
+async def test_diagnostic_tools_can_be_turned_off(services):
+    @asynccontextmanager
+    async def factory():
+        yield services
+
+    async with Client(build_server(factory, diagnostics=False)) as connected:
+        names = {tool.name for tool in (await connected.list_tools()).tools}
+    assert names == WEB_TOOLS
+
+
+@pytest.mark.anyio
+async def test_download_file_through_mcp(client, site, services, tmp_path):
+    picture = b"\x89PNG fake picture"
+    services.settings = load_settings({"RESEARCH_MCP_DOWNLOAD_DIR": str(tmp_path)})
+    site.add("/pics/cat.png", picture, content_type="image/png")
+    result = await client.call_tool("download_file", {"url": site.url("/pics/cat.png"), "folder": "pics"})
+    assert result.is_error is False
+    assert (tmp_path / "pics" / "cat.png").read_bytes() == picture
+    assert f"sha256: {hashlib.sha256(picture).hexdigest()}" in result.content[0].text
+
+
+@pytest.mark.anyio
+async def test_spike_image_shows_a_code_that_is_not_in_the_text(client, caplog):
+    with caplog.at_level(logging.INFO, logger="research_mcp"):
+        result = await client.call_tool("spike_image", {"target_kb": 50})
+    assert result.is_error is False
+    assert result.structured_content is None
+    assert [block.type for block in result.content] == ["text", "image"]
+    png = base64.b64decode(result.content[1].data)
+    assert png.startswith(b"\x89PNG") and len(png) == 50 * 1024
+    assert result.content[1].mime_type == "image/png"
+    code = re.search(r"spike image: code (\S+)", caplog.text).group(1)
+    assert code not in result.content[0].text
+
+
+@pytest.mark.anyio
+async def test_spike_image_structured_returns_the_facts_too(client):
+    result = await client.call_tool("spike_image_structured", {"target_kb": 60})
+    assert result.is_error is False
+    png = base64.b64decode(result.content[1].data)
+    assert result.structured_content == {
+        "target_kb": 60, "png_bytes": 60 * 1024, "base64_bytes": len(result.content[1].data),
+        "width": 1000, "height": 320, "sha256": hashlib.sha256(png).hexdigest(),
+    }
+
+
+@pytest.mark.anyio
+async def test_spike_sleep_outlives_the_tool_deadline(client, monkeypatch):
+    monkeypatch.setattr(server_module, "TOOL_DEADLINE", 0.2)
+    result = await client.call_tool("spike_sleep", {"seconds": 1})
+    assert result.is_error is False
+    assert result.content[0].text.startswith("[spike_sleep] slept 1 s")
+    # The in-process client sends no progress token; the stdio test below covers progress.
+    assert "progress notifications: none" in result.content[0].text
 
 
 @pytest.mark.anyio
@@ -152,10 +226,18 @@ async def test_stdio_server_starts_lists_tools_and_blocks_localhost(tmp_path):
         args=["-m", "research_mcp"],
         env={**os.environ, "RESEARCH_MCP_LOG_DIR": str(tmp_path), "PYTHONUTF8": "1"},
     )
+    updates = []
+
+    async def on_progress(progress, total, message):
+        updates.append((progress, total, message))
+
     async with Client(params) as stdio_client:
         names = {tool.name for tool in (await stdio_client.list_tools()).tools}
         result = await stdio_client.call_tool("read_webpage", {"url": "http://127.0.0.1:9/"})
-    assert names == {"search_web", "read_webpage"}
+        slept = await stdio_client.call_tool("spike_sleep", {"seconds": 1}, progress_callback=on_progress)
+    assert "progress notifications: 1 sent" in slept.content[0].text
+    assert updates == [(1, 1, "slept 1 of 1 s")]
+    assert names == WEB_TOOLS | DIAGNOSTIC_TOOLS
     assert result.content[0].text.startswith("Error [blocked_private_address]:")
     logs = list(tmp_path.glob("research-mcp-*.log"))
     assert len(logs) == 1

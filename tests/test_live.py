@@ -4,6 +4,7 @@ import pytest
 
 from research_mcp.config import load_settings
 from research_mcp.services import open_services
+from research_mcp.tools.download import download_file
 from research_mcp.tools.search import DdgsProvider
 from research_mcp.tools.webpage import read_webpage
 
@@ -40,3 +41,11 @@ async def test_reads_a_real_pdf_page_by_page():
     assert output.splitlines()[1].startswith("render: pdf")
     assert "[page 1]" in output
     assert "note: PDF with" in output
+
+
+@pytest.mark.anyio
+async def test_downloads_a_real_picture(tmp_path):
+    async with open_services(load_settings({"RESEARCH_MCP_DOWNLOAD_DIR": str(tmp_path)})) as services:
+        output = await download_file(services, "https://www.python.org/static/img/python-logo.png")
+    assert (tmp_path / "python-logo.png").read_bytes().startswith(b"\x89PNG")
+    assert "type: image/png" in output

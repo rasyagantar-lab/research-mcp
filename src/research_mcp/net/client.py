@@ -29,6 +29,7 @@ class FetchResult:
     content_type: str
     charset: str | None
     body: bytes
+    disposition: str | None = None  # raw Content-Disposition header; download_file takes the file name from it
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,7 @@ class Fetcher:
                     content_type=content_type_header.split(";")[0].strip().lower(),
                     charset=charset.group(1) if charset else None,
                     body=b"".join(chunks),
+                    disposition=response.headers.get("content-disposition"),
                 )
                 return _Attempt(result, None, _retry_after(response.headers.get("retry-after")))
         except httpx2.TimeoutException:

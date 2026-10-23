@@ -196,7 +196,7 @@ async def test_non_text_content(site, services, content_type, code):
     err = await read_error(services, site.url("/file"))
     assert err.code == code
     if code == "not_text":
-        assert "read_image" in err.suggestion
+        assert "download_file" in err.suggestion
 
 
 @pytest.mark.anyio

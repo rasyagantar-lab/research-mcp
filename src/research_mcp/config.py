@@ -8,8 +8,14 @@ from pathlib import Path
 from research_mcp import __version__
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_URL = "https://github.com/rasyagantar-lab/research-mcp"
 RENDER_MODES = ("auto", "off")
+SWITCH_VALUES = {"on": True, "off": False}
 MAX_CONTACT_CHARS = 200
+
+
+def default_download_dir() -> Path:
+    return Path.home() / "research-files"
 
 
 @dataclass(frozen=True)
@@ -17,6 +23,8 @@ class Settings:
     contact: str
     log_dir: Path
     render: str
+    download_dir: Path = field(default_factory=default_download_dir)
+    diagnostics: bool = True
     warnings: tuple[str, ...] = field(default=())
 
 
@@ -39,11 +47,27 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     log_dir_text = env.get("RESEARCH_MCP_LOG_DIR", "").strip()
     log_dir = Path(log_dir_text) if log_dir_text else REPO_ROOT / "logs"
 
-    return Settings(contact=contact, log_dir=log_dir, render=render, warnings=tuple(warnings))
+    download_dir_text = env.get("RESEARCH_MCP_DOWNLOAD_DIR", "").strip()
+    download_dir = Path(download_dir_text).expanduser() if download_dir_text else default_download_dir()
+    if not download_dir.is_absolute():
+        warnings.append(f"RESEARCH_MCP_DOWNLOAD_DIR={download_dir_text!r} is not an absolute path; using the default")
+        download_dir = default_download_dir()
+
+    diagnostics_text = env.get("RESEARCH_MCP_DIAGNOSTICS", "").strip().lower() or "on"
+    if diagnostics_text not in SWITCH_VALUES:
+        warnings.append(f"RESEARCH_MCP_DIAGNOSTICS={diagnostics_text!r} is not 'on' or 'off'; using 'on'")
+        diagnostics_text = "on"
+
+    return Settings(
+        contact=contact, log_dir=log_dir, render=render, download_dir=download_dir,
+        diagnostics=SWITCH_VALUES[diagnostics_text], warnings=tuple(warnings),
+    )
 
 
 def user_agent(settings: Settings) -> str:
-    """One honest bot-style User-Agent. The contact is opt-in: it is never filled from the user's account."""
+    """One honest bot-style User-Agent naming the project: Wikimedia answers 403 to bot agents without a URL
+    (seen 2026-10-23). The personal contact is opt-in: it is never filled from the user's account."""
+    parts = [f"research-mcp/{__version__}", f"+{PROJECT_URL}"]
     if settings.contact:
-        return f"Mozilla/5.0 (compatible; research-mcp/{__version__}; +{settings.contact})"
-    return f"Mozilla/5.0 (compatible; research-mcp/{__version__})"
+        parts.append(f"+{settings.contact}")
+    return f"Mozilla/5.0 (compatible; {'; '.join(parts)})"

@@ -23,6 +23,8 @@ def test_defaults_without_environment():
     assert settings.contact == ""
     assert settings.render == "auto"
     assert settings.log_dir == REPO_ROOT / "logs"
+    assert settings.download_dir == Path.home() / "research-files"
+    assert settings.diagnostics is True
     assert settings.warnings == ()
 
 
@@ -35,10 +37,22 @@ def test_reads_environment_values(tmp_path):
         "RESEARCH_MCP_RENDER": " OFF ",
         "RESEARCH_MCP_CONTACT": "  https://example.org/contact  ",
         "RESEARCH_MCP_LOG_DIR": str(tmp_path),
+        "RESEARCH_MCP_DOWNLOAD_DIR": f"  {tmp_path / 'files'}  ",
+        "RESEARCH_MCP_DIAGNOSTICS": " Off",
     })
     assert settings.render == "off"
     assert settings.contact == "https://example.org/contact"
     assert settings.log_dir == Path(tmp_path)
+    assert settings.download_dir == tmp_path / "files"
+    assert settings.diagnostics is False
+    assert settings.warnings == ()
+
+
+def test_bad_download_dir_and_diagnostics_values_fall_back_with_warnings():
+    settings = load_settings({"RESEARCH_MCP_DOWNLOAD_DIR": "relative/folder", "RESEARCH_MCP_DIAGNOSTICS": "maybe"})
+    assert settings.download_dir == Path.home() / "research-files"
+    assert settings.diagnostics is True
+    assert len(settings.warnings) == 2
 
 
 def test_bad_render_value_falls_back_with_a_warning():
@@ -55,6 +69,9 @@ def test_contact_cannot_break_the_user_agent_header():
 
 
 def test_user_agent_without_and_with_contact():
-    assert user_agent(load_settings({})) == f"Mozilla/5.0 (compatible; research-mcp/{__version__})"
+    project = "+https://github.com/rasyagantar-lab/research-mcp"
+    assert user_agent(load_settings({})) == f"Mozilla/5.0 (compatible; research-mcp/{__version__}; {project})"
     with_contact = load_settings({"RESEARCH_MCP_CONTACT": "https://example.org/bot"})
-    assert user_agent(with_contact) == f"Mozilla/5.0 (compatible; research-mcp/{__version__}; +https://example.org/bot)"
+    assert user_agent(with_contact) == (
+        f"Mozilla/5.0 (compatible; research-mcp/{__version__}; {project}; +https://example.org/bot)"
+    )

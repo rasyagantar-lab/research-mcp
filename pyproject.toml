@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "research-mcp"
-version = "0.1.0"
-description = "Local MCP server that lets Claude search the web and read web pages and PDFs."
+version = "0.2.0"
+description = "Local MCP server that lets Claude search the web, read web pages and PDFs, and download files."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -16,6 +16,7 @@ dependencies = [
     "trafilatura>=2.3,<3",
     "ddgs>=9.16,<10",
     "pypdf[crypto]>=6.19,<7",
+    "pillow>=11,<14",
 ]
 
 [project.optional-dependencies]

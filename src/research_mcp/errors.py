@@ -13,6 +13,7 @@ CODES = frozenset({
     "rate_limited",
     "offset_out_of_range",
     "render_unavailable",
+    "save_failed",
     "internal_error",
 })
 

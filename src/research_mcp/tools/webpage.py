@@ -83,7 +83,7 @@ async def _load(services: Services, url: str) -> Page:
     if content_type in PDF_TYPES or (content_type in UNLABELED_TYPES and b"%PDF-" in result.body[:1024]):
         return await _pdf_page(result)
     if content_type.startswith("image/"):
-        raise ToolError("not_text", f"{result.url} is an image ({content_type})", "use read_image to look at it")
+        raise ToolError("not_text", f"{result.url} is an image ({content_type})", "use download_file to save it")
     if content_type == "application/json" or content_type.endswith("+json"):
         return _text_page(result, _pretty_json(decode_body(result.body, result.charset)))
     if content_type.startswith("text/") or content_type in TEXT_APPLICATION_TYPES or content_type.endswith("+xml"):
