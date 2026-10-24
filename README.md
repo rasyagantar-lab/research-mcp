@@ -6,7 +6,13 @@ Server [MCP](https://modelcontextprotocol.io) lokal yang memberi Claude alat unt
 |---|---|
 | `search_web` | Meta-search ke beberapa mesin sekaligus (DuckDuckGo, Bing, Brave, dan lainnya, lewat [ddgs](https://pypi.org/project/ddgs/)). Hasilnya judul, URL, dan cuplikan; bisa difilter menurut kebaruan (`recency`) dan wilayah (`region`). |
 | `read_webpage` | Membaca **satu** halaman web sebagai markdown, dengan tautan dan URL gambar tetap utuh. Halaman panjang dibaca bertahap lewat `offset` / `next_offset`. PDF yang punya lapisan teks juga bisa dibaca (teks ditandai `[page N]`). |
-| `download_file` | Mengunduh **satu** file (gambar, PDF, arsip, data, dll., maks. 50 MB) ke folder riset lokal. Hasilnya path, ukuran, jenis konten, dan SHA-256, jadi file bisa langsung diunggah ke artifact atau doc lalu dicek keutuhannya. Nama file diambil dari parameter `filename`, header server, atau URL; `folder` memilih subfolder. File yang sudah ada tidak pernah ditimpa (nama baru jadi `nama (1).ext`). |
+| `download_file` | Mengunduh **satu** file (gambar, PDF, arsip, data, dll., maks. 50 MB) ke folder riset lokal. Hasilnya path, ukuran, jenis konten, SHA-256, dan untuk gambar juga ukuran piksel, format, dan jumlah frame (SVG dibaca dari `width`/`height` atau `viewBox`), jadi gambar bisa langsung dipakai di artifact atau doc tanpa menebak ukurannya. Nama file diambil dari parameter `filename`, header server, atau URL; `folder` memilih subfolder; `save_dir` menyimpan langsung ke folder lain yang diizinkan (lihat `RESEARCH_MCP_SAVE_DIRS`). File yang sudah ada tidak pernah ditimpa (nama baru jadi `nama (1).ext`). |
+
+Connector ini melengkapi browser bawaan Claude, bukan menggantikannya: browser untuk melihat dan menjelajah, connector untuk membaca teks dengan hemat token dan membawa file (terutama gambar) ke laptop, artifact, dan doc.
+
+### Gambar ke artifact
+
+Sesi Claude Code hanya bisa mempublikasikan file yang ada di bawah folder kerjanya. Jadi daftarkan folder proyek di `RESEARCH_MCP_SAVE_DIRS`, lalu Claude memanggil `download_file` dengan `save_dir` di dalam folder kerja sesi itu. Gambar langsung bisa dipublikasikan bersama halaman artifact (path relatif), tanpa disalin dulu. SHA-256 di hasil `download_file` dipakai untuk mengecek file yang terpublikasi identik.
 
 Alat diagnostik (bisa dimatikan, lihat [Konfigurasi opsional](#konfigurasi-opsional)):
 
@@ -49,13 +55,18 @@ Buka menu Claude, pilih **Settings…**, lalu tab **Developer**, lalu **Edit Con
   "mcpServers": {
     "research": {
       "command": "C:\\path\\ke\\research-mcp\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "research_mcp"]
+      "args": ["-m", "research_mcp"],
+      "env": { "RESEARCH_MCP_SAVE_DIRS": "C:\\Users\\<nama>\\Projects" }
     }
   }
 }
 ```
 
-Tutup Claude Desktop sepenuhnya (bukan hanya jendelanya), lalu buka lagi. Server muncul di menu **Add files, connectors, and more** pada kolom pesan. Pada instalasi MSIX (Microsoft Store), file config ada di `%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude\`; tombol Edit Config membukanya. Jika server tidak muncul, lihat log di `%APPDATA%\Claude\logs` (stderr server ada di `mcp-server-research.log`).
+Blok `env` opsional; isinya variabel dari [Konfigurasi opsional](#konfigurasi-opsional).
+
+Tutup Claude Desktop sepenuhnya (Quit dari ikon tray, bukan hanya jendelanya), lalu buka lagi. Server muncul di menu **Add files, connectors, and more** pada kolom pesan, dan juga tersedia di sesi Claude Code di dalam app. Tombol Edit Config membuka file config yang benar; pada instalasi MSIX (Microsoft Store) versi baru letaknya `%LOCALAPPDATA%\Claude-Data\claude_…\`.
+
+Edit config **saat Claude Desktop tertutup**. App membaca config sekali saat mulai, lalu menulis ulang file itu dari salinannya di memori setiap kali preferensi berubah, sehingga perubahan yang dibuat saat app berjalan bisa hilang. Cara paling aman: Quit dulu, edit, lalu buka lagi.
 
 ### Claude Code
 
@@ -94,6 +105,7 @@ Diatur lewat variabel lingkungan. Pada Claude Desktop, taruh di blok `"env"` pad
 | `RESEARCH_MCP_CONTACT` | Kontak pribadi (URL atau alamat email) yang ditambahkan ke header `User-Agent`. Kosong secara default dan tidak pernah diisi otomatis. Nilainya dikirim ke setiap situs yang dibaca, jadi isi hanya bila memang diperlukan. |
 | `RESEARCH_MCP_LOG_DIR` | Folder log. Default: `logs/` di folder proyek. Satu file per proses, dihapus otomatis setelah 14 hari. |
 | `RESEARCH_MCP_DOWNLOAD_DIR` | Folder riset tujuan `download_file` (path absolut). Default: `research-files` di folder user, misalnya `C:\Users\<nama>\research-files`. Bagikan folder ini ke Claude (Cowork) agar file hasil unduhan bisa langsung dipakai di artifact atau doc. |
+| `RESEARCH_MCP_SAVE_DIRS` | Folder tambahan (path absolut, dipisah `;` di Windows atau `:` di macOS/Linux) yang boleh dipakai `save_dir`, beserta semua subfolder-nya. Kosong secara default: `save_dir` hanya boleh di dalam folder riset. Contoh: `C:\Users\<nama>\Projects`. Folder ini juga disebut di deskripsi alat agar Claude langsung memilih yang benar. |
 | `RESEARCH_MCP_DIAGNOSTICS` | `on` (default) atau `off`. `off` menyembunyikan alat `spike_*`. |
 
 ## Keamanan
@@ -103,7 +115,8 @@ Isi halaman web adalah data yang tidak tepercaya. Server ini membantu dengan beb
 - Semua teks dari web dibungkus penanda `[UNTRUSTED WEB CONTENT]` agar model memperlakukannya sebagai data, bukan perintah. Prompt injection tetap mungkin terjadi.
 - Alamat non-publik ditolak: loopback, privat, CGNAT, link-local (termasuk endpoint metadata cloud), multicast, dan reserved, juga bila disembunyikan di IPv6. Pemeriksaan dilakukan saat koneksi dibuat, jadi berlaku juga untuk redirect dan hasil DNS.
 - Ukuran unduhan dibatasi menurut jenis konten, dan tiap pemanggilan alat punya batas waktu 45 detik (kecuali `spike_sleep`, yang memang mengukur batas itu).
-- `download_file` hanya menulis di dalam folder riset: path absolut, `..`, dan junction yang keluar dari folder ditolak; nama file dibersihkan dari karakter dan nama perangkat yang dilarang Windows.
+- `download_file` hanya menulis di dalam folder riset atau folder `RESEARCH_MCP_SAVE_DIRS`: `save_dir` di luar itu, path relatif, `..`, dan junction yang keluar dari folder ditolak sebelum ada unduhan; nama file dibersihkan dari karakter dan nama perangkat yang dilarang Windows. Daftarkan hanya folder yang memang boleh diisi file dari internet.
+- Ukuran gambar dibaca dari header saja (Pillow), tanpa mendekode piksel; ukuran yang tidak masuk akal (bom dekompresi) dilewati.
 - Header `User-Agent` menyebut nama dan URL proyek ini (Wikimedia menolak bot tanpa URL), tanpa data pribadi.
 - Log ditulis lokal dan hanya menyimpan host dan path URL, tanpa query.
 
@@ -131,6 +144,7 @@ Perintah kedua menjalankan tes offline; yang ketiga hanya tes yang memakai inter
 
 | Versi | Perubahan |
 |---|---|
+| 0.3.0 | `download_file` melaporkan ukuran piksel, format, dan frame gambar (termasuk SVG); parameter `save_dir` dan variabel `RESEARCH_MCP_SAVE_DIRS` untuk menyimpan langsung ke folder proyek yang bisa dipublikasikan. |
 | 0.2.0 | `download_file`; alat diagnostik `spike_image`, `spike_image_structured`, `spike_sleep`; `User-Agent` menyertakan URL proyek; variabel `RESEARCH_MCP_DOWNLOAD_DIR` dan `RESEARCH_MCP_DIAGNOSTICS`. |
 | 0.1.0 | Rilis awal: `search_web` dan `read_webpage`. |
 

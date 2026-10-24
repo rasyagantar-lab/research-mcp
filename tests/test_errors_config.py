@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,20 @@ def test_reads_environment_values(tmp_path):
     assert settings.download_dir == tmp_path / "files"
     assert settings.diagnostics is False
     assert settings.warnings == ()
+
+
+def test_save_dirs_default_to_none_and_are_read_as_a_path_list(tmp_path):
+    assert load_settings({}).save_dirs == ()
+    first, second = tmp_path / "projects", tmp_path / "other"
+    settings = load_settings({"RESEARCH_MCP_SAVE_DIRS": f" {first} {os.pathsep}{os.pathsep}{second}"})
+    assert settings.save_dirs == (first, second)
+    assert settings.warnings == ()
+
+
+def test_relative_save_dirs_are_ignored_with_a_warning(tmp_path):
+    settings = load_settings({"RESEARCH_MCP_SAVE_DIRS": f"relative{os.pathsep}{tmp_path}"})
+    assert settings.save_dirs == (tmp_path,)
+    assert "relative" in settings.warnings[0]
 
 
 def test_bad_download_dir_and_diagnostics_values_fall_back_with_warnings():

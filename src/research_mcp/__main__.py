@@ -15,7 +15,9 @@ def main() -> None:
     for warning in settings.warnings:
         log.warning(warning)
     log.info("research-mcp starting; log file: %s", log_file)
-    build_server(lambda: open_services(settings), diagnostics=settings.diagnostics).run()
+    build_server(
+        lambda: open_services(settings), diagnostics=settings.diagnostics, save_folders=settings.save_dirs
+    ).run()
 
 
 if __name__ == "__main__":

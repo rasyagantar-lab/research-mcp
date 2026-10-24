@@ -42,8 +42,9 @@ async def test_lists_the_tools_with_their_schemas_and_hints(client):
     download = tools["download_file"]
     assert download.annotations.read_only_hint is False
     assert download.annotations.destructive_hint is False
-    assert set(download.input_schema["properties"]) == {"url", "filename", "folder"}
+    assert set(download.input_schema["properties"]) == {"url", "filename", "folder", "save_dir"}
     assert download.input_schema["required"] == ["url"]
+    assert "save_dir must lie inside the research folder." in download.description
     assert set(tools["spike_image_structured"].output_schema["properties"]) == {
         "target_kb", "png_bytes", "base64_bytes", "width", "height", "sha256",
     }
@@ -84,6 +85,18 @@ async def test_diagnostic_tools_can_be_turned_off(services):
     async with Client(build_server(factory, diagnostics=False)) as connected:
         names = {tool.name for tool in (await connected.list_tools()).tools}
     assert names == WEB_TOOLS
+
+
+@pytest.mark.anyio
+async def test_download_description_names_the_allowed_save_folders(services, tmp_path):
+    @asynccontextmanager
+    async def factory():
+        yield services
+
+    async with Client(build_server(factory, save_folders=[tmp_path / "projects"])) as connected:
+        tools = {tool.name: tool for tool in (await connected.list_tools()).tools}
+    assert str(tmp_path / "projects") in tools["download_file"].description
+    assert "Claude Code session" in tools["download_file"].description
 
 
 @pytest.mark.anyio

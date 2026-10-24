@@ -1,8 +1,10 @@
-"""download_file: save one file from the public web into the local research folder.
+"""download_file: save one file from the public web into the local research folder, or into an allowed save_dir.
 
 The research folder (RESEARCH_MCP_DOWNLOAD_DIR, default ~/research-files) is the hand-off point: once it is
 shared with Claude (Cowork), a saved file can be uploaded into an artifact or doc, and the SHA-256 in the
-result lets Claude check that the upload arrived byte for byte.
+result lets Claude check that the upload arrived byte for byte. A Claude Code session can only publish files
+that sit under its working directory, so save_dir puts the file straight there; it must lie inside the research
+folder or a folder listed in RESEARCH_MCP_SAVE_DIRS, never anywhere the model names.
 """
 
 import hashlib
@@ -16,7 +18,9 @@ from urllib.parse import unquote, urlsplit
 
 import anyio
 
+from research_mcp.config import Settings
 from research_mcp.errors import ToolError
+from research_mcp.extract.image import ImageInfo, image_info
 from research_mcp.net.urls import check_url
 from research_mcp.services import Services
 from research_mcp.tools.common import one_line
@@ -42,14 +46,17 @@ class Saved:
     sha256: str
 
 
-async def download_file(services: Services, url: str, filename: str | None = None, folder: str = "") -> str:
+async def download_file(
+    services: Services, url: str, filename: str | None = None, folder: str = "", save_dir: str | None = None
+) -> str:
     target = check_url(url)
     requested = None
     if filename is not None and filename.strip():
         requested = clean_name(filename)
         if not requested:
             raise _invalid_name(f"the file name {filename[:100]!r} has no usable characters")
-    root = services.settings.download_dir
+    settings = services.settings
+    root = save_root(settings, save_dir)
     parts = folder_parts(folder)
     result = await services.fetcher.get(target, max_bytes=DOWNLOAD_LIMIT)
     if result.status == 429:
@@ -57,20 +64,53 @@ async def download_file(services: Services, url: str, filename: str | None = Non
     if result.status >= 400:
         raise ToolError("http_error", f"the site answered HTTP {result.status}", "check the URL or try again later")
     name = choose_name(requested, result.disposition, result.url, result.content_type)
-    saved = await anyio.to_thread.run_sync(save_bytes, root, parts, name, result.body, abandon_on_cancel=True)
-    return format_saved(result.url, saved, result.content_type, root)
+    saved = await anyio.to_thread.run_sync(
+        save_bytes, root, parts, name, result.body, allowed_roots(settings), abandon_on_cancel=True
+    )
+    info = None
+    if result.content_type.startswith("image/") or result.content_type in UNLABELED_TYPES:
+        info = await anyio.to_thread.run_sync(image_info, result.body, result.content_type, abandon_on_cancel=True)
+    return format_saved(result.url, saved, result.content_type, info, root if save_dir and save_dir.strip() else None)
 
 
-def format_saved(url: str, saved: Saved, content_type: str, root: Path) -> str:
-    return "\n".join([
+def format_saved(
+    url: str, saved: Saved, content_type: str, info: ImageInfo | None = None, save_dir: Path | None = None
+) -> str:
+    lines = [
         f"[download_file] {url}",
         f"saved: {saved.path}",
-        f"relative to the research folder: {saved.relative}",
+        f"relative to {'save_dir' if save_dir else 'the research folder'}: {saved.relative}",
         f"size: {saved.size:,} bytes   type: {content_type or 'unknown'}",
-        f"sha256: {saved.sha256}",
-        f"Tip: the research folder is {root}; share it with Claude to upload the file into an artifact or doc, "
-        "then compare the sha256 to check the upload.",
-    ])
+    ]
+    if info is not None:
+        lines.append(f"image: {info.describe()}")
+    elif content_type.startswith("image/"):
+        lines.append("image: its pixel size could not be read (damaged, or a format Pillow cannot open)")
+    lines.append(f"sha256: {saved.sha256}")
+    if save_dir:
+        lines.append("Tip: publish it with a page from this folder, then compare the sha256 to check the upload.")
+    else:
+        lines.append(
+            "Tip: to publish it with an artifact from a Claude Code session, download it with save_dir set to a "
+            "folder in your working directory; from Cowork, share the research folder with Claude."
+        )
+    return "\n".join(lines)
+
+
+def allowed_roots(settings: Settings) -> tuple[Path, ...]:
+    return tuple(path.resolve() for path in (settings.download_dir, *settings.save_dirs))
+
+
+def save_root(settings: Settings, save_dir: str | None) -> Path:
+    """The folder a download lands in: the research folder, or save_dir when it lies inside an allowed folder."""
+    if save_dir is None or not save_dir.strip():
+        return settings.download_dir
+    path = Path(save_dir.strip()).expanduser()
+    if not path.is_absolute():
+        raise _invalid_save_dir(settings, f"{save_dir[:200]!r} is not an absolute path")
+    if not _inside_any(path.resolve(), allowed_roots(settings)):
+        raise _invalid_save_dir(settings, f"{save_dir[:200]!r} is outside the folders download_file may write to")
+    return path
 
 
 def clean_name(text: str) -> str:
@@ -120,11 +160,15 @@ def choose_name(requested: str | None, disposition: str | None, url: str, conten
     return name
 
 
-def save_bytes(root: Path, parts: list[str], name: str, body: bytes) -> Saved:
-    """Write `body` under root/parts without ever overwriting: a taken name becomes 'name (1).ext' and so on."""
+def save_bytes(root: Path, parts: list[str], name: str, body: bytes, allowed: tuple[Path, ...] = ()) -> Saved:
+    """Write `body` under root/parts without ever overwriting: a taken name becomes 'name (1).ext' and so on.
+
+    With `allowed`, root itself must still resolve inside one of those folders once it exists."""
     try:
         root.mkdir(parents=True, exist_ok=True)
         real_root = root.resolve()
+        if allowed and not _inside_any(real_root, allowed):
+            raise _invalid_folder("save_dir leads outside the folders download_file may write to")
         directory = real_root.joinpath(*parts)
         _ensure_inside(directory.resolve(), real_root)  # a junction inside the folder must not lead out of it
         directory.mkdir(parents=True, exist_ok=True)
@@ -162,7 +206,11 @@ def _candidates(directory: Path, name: str):
 
 def _ensure_inside(path: Path, root: Path) -> None:
     if not path.is_relative_to(root):
-        raise _invalid_folder("the folder leads outside the research folder")
+        raise _invalid_folder("the folder leads outside the save folder")
+
+
+def _inside_any(path: Path, roots: tuple[Path, ...]) -> bool:
+    return any(path.is_relative_to(root) for root in roots)
 
 
 def _disposition_name(header: str | None) -> str | None:
@@ -188,5 +236,13 @@ def _invalid_name(message: str) -> ToolError:
 
 def _invalid_folder(message: str) -> ToolError:
     return ToolError(
-        "invalid_argument", message, "pass a sub-folder of the research folder such as 'images/cats', or leave it out"
+        "invalid_argument", message, "pass a sub-folder of the save folder such as 'images/cats', or leave it out"
+    )
+
+
+def _invalid_save_dir(settings: Settings, message: str) -> ToolError:
+    folders = "; ".join(str(path) for path in (settings.download_dir, *settings.save_dirs))
+    return ToolError(
+        "invalid_argument", message,
+        f"pass an absolute folder inside one of these ({folders}), or leave save_dir out to use the research folder",
     )

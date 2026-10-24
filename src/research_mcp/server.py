@@ -2,8 +2,9 @@
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Literal, TypedDict
 
 import anyio
@@ -41,10 +42,10 @@ READ_DESCRIPTION = (
 )
 DOWNLOAD_DESCRIPTION = (
     "Download ONE file from the public web (picture, PDF, archive, data file, ...) into the local research "
-    "folder and return its path, size, content type and SHA-256. Use it to keep a file or to upload it into an "
-    "artifact or doc afterwards; to read a page or PDF as text, use read_webpage. Optional: filename (else the "
-    "server's or the URL's name) and folder (a sub-folder of the research folder). Never overwrites: a taken "
-    "name gets ' (1)'. Limit 50 MB."
+    "folder and return its path, size, content type, SHA-256 and, for pictures, pixel size and format. Use it to "
+    "keep a file or to put it into an artifact or doc; to read a page or PDF as text, use read_webpage. Optional: "
+    "filename (else the server's or the URL's name), folder (a sub-folder), and save_dir (an absolute folder to "
+    "save into instead of the research folder). Never overwrites: a taken name gets ' (1)'. Limit 50 MB."
 )
 SPIKE_IMAGE_DESCRIPTION = (
     "Diagnostic, not for research: returns a PNG padded to target_kb that shows a random code word; report the "
@@ -77,7 +78,20 @@ class ImageFacts(TypedDict):
     sha256: str
 
 
-def build_server(services_factory: ServicesFactory | None = None, *, diagnostics: bool = True) -> MCPServer:
+def download_description(save_folders: Sequence[Path]) -> str:
+    """The tool description names the folders save_dir may point into, so Claude picks a valid one first time."""
+    if not save_folders:
+        return DOWNLOAD_DESCRIPTION + " save_dir must lie inside the research folder."
+    folders = "; ".join(str(path) for path in save_folders)
+    return DOWNLOAD_DESCRIPTION + (
+        f" save_dir must lie inside the research folder or one of: {folders}. In a Claude Code session, set "
+        "save_dir to a folder in your working directory so the file can be published with an artifact."
+    )
+
+
+def build_server(
+    services_factory: ServicesFactory | None = None, *, diagnostics: bool = True, save_folders: Sequence[Path] = ()
+) -> MCPServer:
     factory = services_factory or (lambda: open_services(load_settings()))
 
     @asynccontextmanager
@@ -115,17 +129,21 @@ def build_server(services_factory: ServicesFactory | None = None, *, diagnostics
             lambda: webpage.read_webpage(services, url, offset, max_chars, render),
         )
 
-    @mcp.tool(name="download_file", description=DOWNLOAD_DESCRIPTION, annotations=WRITES_FILES, structured_output=False)
+    @mcp.tool(
+        name="download_file", description=download_description(save_folders), annotations=WRITES_FILES,
+        structured_output=False,
+    )
     async def download_file_tool(
         url: Annotated[str, Field(min_length=1, max_length=2048)],
         ctx: Context,
         filename: Annotated[str | None, Field(max_length=200)] = None,
         folder: Annotated[str, Field(max_length=300)] = "",
+        save_dir: Annotated[str | None, Field(max_length=500)] = None,
     ) -> CallToolResult:
         services: Services = ctx.request_context.lifespan_context
         return await run_tool(
             "download_file", redact_url(url), ctx,
-            lambda: download.download_file(services, url, filename, folder),
+            lambda: download.download_file(services, url, filename, folder, save_dir),
         )
 
     if not diagnostics:

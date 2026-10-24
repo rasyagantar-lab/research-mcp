@@ -24,6 +24,8 @@ class Settings:
     log_dir: Path
     render: str
     download_dir: Path = field(default_factory=default_download_dir)
+    # Folders download_file may also save into (its save_dir), e.g. the projects a Claude Code session publishes from.
+    save_dirs: tuple[Path, ...] = field(default=())
     diagnostics: bool = True
     warnings: tuple[str, ...] = field(default=())
 
@@ -53,13 +55,23 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         warnings.append(f"RESEARCH_MCP_DOWNLOAD_DIR={download_dir_text!r} is not an absolute path; using the default")
         download_dir = default_download_dir()
 
+    save_dirs: list[Path] = []
+    for entry in env.get("RESEARCH_MCP_SAVE_DIRS", "").split(os.pathsep):
+        if not entry.strip():
+            continue
+        path = Path(entry.strip()).expanduser()
+        if path.is_absolute():
+            save_dirs.append(path)
+        else:
+            warnings.append(f"RESEARCH_MCP_SAVE_DIRS entry {entry.strip()!r} is not an absolute path; ignored")
+
     diagnostics_text = env.get("RESEARCH_MCP_DIAGNOSTICS", "").strip().lower() or "on"
     if diagnostics_text not in SWITCH_VALUES:
         warnings.append(f"RESEARCH_MCP_DIAGNOSTICS={diagnostics_text!r} is not 'on' or 'off'; using 'on'")
         diagnostics_text = "on"
 
     return Settings(
-        contact=contact, log_dir=log_dir, render=render, download_dir=download_dir,
+        contact=contact, log_dir=log_dir, render=render, download_dir=download_dir, save_dirs=tuple(save_dirs),
         diagnostics=SWITCH_VALUES[diagnostics_text], warnings=tuple(warnings),
     )
 

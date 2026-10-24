@@ -1,5 +1,8 @@
 import hashlib
+import io
 import re
+import subprocess
+import sys
 
 import pytest
 
@@ -122,6 +125,101 @@ async def test_an_unwritable_folder_is_save_failed(site, services, tmp_path):
     services.settings = load_settings({"RESEARCH_MCP_DOWNLOAD_DIR": str(blocker)})
     site.add("/cat.png", PICTURE, content_type="image/png")
     assert (await download_error(services, site.url("/cat.png"))).code == "save_failed"
+
+
+def real_png(size=(48, 32)):
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.new("RGB", size, "green").save(out, format="PNG")
+    return out.getvalue()
+
+
+@pytest.fixture
+def project(services, tmp_path):
+    """A projects folder listed in RESEARCH_MCP_SAVE_DIRS, next to the research folder."""
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    services.settings = load_settings({
+        "RESEARCH_MCP_DOWNLOAD_DIR": str(tmp_path / "research-files"),
+        "RESEARCH_MCP_SAVE_DIRS": str(projects),
+    })
+    return projects
+
+
+@pytest.mark.anyio
+async def test_pictures_report_pixel_size_and_format(site, services, folder):
+    site.add("/chart.png", real_png(), content_type="image/png")
+    output = await download_file(services, site.url("/chart.png"))
+    assert "image: 48 × 32 px, PNG" in output
+
+
+@pytest.mark.anyio
+async def test_a_damaged_picture_says_its_size_is_unknown(site, services, folder):
+    site.add("/broken.png", PICTURE, content_type="image/png")
+    output = await download_file(services, site.url("/broken.png"))
+    assert "image: its pixel size could not be read" in output
+
+
+@pytest.mark.anyio
+async def test_non_pictures_have_no_image_line(site, services, folder):
+    site.add("/notes.txt", "plain words", content_type="text/plain")
+    assert "image:" not in await download_file(services, site.url("/notes.txt"))
+
+
+@pytest.mark.anyio
+async def test_the_research_folder_tip_points_to_save_dir(site, services, folder):
+    site.add("/cat.png", PICTURE, content_type="image/png")
+    assert "save_dir" in (await download_file(services, site.url("/cat.png"))).splitlines()[-1]
+
+
+@pytest.mark.anyio
+async def test_save_dir_puts_the_file_straight_into_an_allowed_project(site, services, project):
+    site.add("/cat.png", real_png(), content_type="image/png")
+    target = project / "my-site"
+    output = await download_file(services, site.url("/cat.png"), folder="assets", save_dir=str(target))
+    saved = target / "assets" / "cat.png"
+    assert saved.read_bytes() == real_png()
+    assert saved_path(output) == str(saved.resolve())
+    assert "relative to save_dir: assets/cat.png" in output
+    assert "Tip: publish it with a page from this folder" in output
+
+
+@pytest.mark.anyio
+async def test_save_dir_may_be_inside_the_research_folder_without_any_setting(site, services, folder):
+    site.add("/cat.png", PICTURE, content_type="image/png")
+    output = await download_file(services, site.url("/cat.png"), save_dir=str(folder / "album"))
+    assert (folder / "album" / "cat.png").read_bytes() == PICTURE
+    assert "relative to save_dir: cat.png" in output
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("make_dir", [
+    lambda tmp, project: str(tmp / "elsewhere"),
+    lambda tmp, project: str(project / ".." / "elsewhere"),
+    lambda tmp, project: "relative/folder",
+])
+async def test_save_dir_outside_the_allowed_folders_is_refused_before_any_request(
+    site, services, project, tmp_path, make_dir
+):
+    err = await download_error(services, site.url("/cat.png"), save_dir=make_dir(tmp_path, project))
+    assert err.code == "invalid_argument"
+    assert str(project) in err.suggestion
+    assert site.requests == []
+    assert not (tmp_path / "elsewhere").exists()
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(sys.platform != "win32", reason="directory junctions are a Windows feature")
+async def test_a_junction_out_of_an_allowed_folder_is_refused(site, services, project, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = project / "link"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True, capture_output=True)
+    site.add("/cat.png", PICTURE, content_type="image/png")
+    err = await download_error(services, site.url("/cat.png"), save_dir=str(link / "sub"))
+    assert err.code == "invalid_argument"
+    assert not any(outside.iterdir())
 
 
 @pytest.mark.parametrize(("raw", "clean"), [
