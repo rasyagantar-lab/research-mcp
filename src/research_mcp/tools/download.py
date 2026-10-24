@@ -1,8 +1,9 @@
 """download_file: save one file from the public web into the local research folder, or into an allowed save_dir.
 
-The research folder (RESEARCH_MCP_DOWNLOAD_DIR, default ~/research-files) is the hand-off point: once it is
-shared with Claude (Cowork), a saved file can be uploaded into an artifact or doc, and the SHA-256 in the
-result lets Claude check that the upload arrived byte for byte. A Claude Code session can only publish files
+The research folder (RESEARCH_MCP_DOWNLOAD_DIR, default ~/research-files) is the hand-off point: once the user
+connects it to a claude.ai, phone or Cowork session, its files appear in the desktop's VM under $HOME/mnt, and a
+saved file can be uploaded into an artifact or doc; the SHA-256 in the result lets Claude check that the upload
+arrived byte for byte. A Claude Code session can only publish files
 that sit under its working directory, so save_dir puts the file straight there; it must lie inside the research
 folder or a folder listed in RESEARCH_MCP_SAVE_DIRS, never anywhere the model names.
 """
@@ -70,18 +71,30 @@ async def download_file(
     info = None
     if result.content_type.startswith("image/") or result.content_type in UNLABELED_TYPES:
         info = await anyio.to_thread.run_sync(image_info, result.body, result.content_type, abandon_on_cancel=True)
-    return format_saved(result.url, saved, result.content_type, info, root if save_dir and save_dir.strip() else None)
+    if save_dir and save_dir.strip():
+        return format_saved(result.url, saved, result.content_type, info, save_dir=root)
+    # Sessions from claude.ai, the phone or Cowork see a connected folder at $HOME/mnt/<folder name> in the
+    # desktop's Linux VM, so the research folder's files are there once the user has connected it.
+    device_path = f"$HOME/mnt/{settings.download_dir.name}/{saved.relative}"
+    return format_saved(result.url, saved, result.content_type, info, device_path=device_path)
 
 
 def format_saved(
-    url: str, saved: Saved, content_type: str, info: ImageInfo | None = None, save_dir: Path | None = None
+    url: str,
+    saved: Saved,
+    content_type: str,
+    info: ImageInfo | None = None,
+    save_dir: Path | None = None,
+    device_path: str | None = None,
 ) -> str:
     lines = [
         f"[download_file] {url}",
         f"saved: {saved.path}",
         f"relative to {'save_dir' if save_dir else 'the research folder'}: {saved.relative}",
-        f"size: {saved.size:,} bytes   type: {content_type or 'unknown'}",
     ]
+    if device_path:
+        lines.append(f"device path (once the research folder is a connected folder): {device_path}")
+    lines.append(f"size: {saved.size:,} bytes   type: {content_type or 'unknown'}")
     if info is not None:
         lines.append(f"image: {info.describe()}")
     elif content_type.startswith("image/"):
@@ -91,8 +104,11 @@ def format_saved(
         lines.append("Tip: publish it with a page from this folder, then compare the sha256 to check the upload.")
     else:
         lines.append(
-            "Tip: to publish it with an artifact from a Claude Code session, download it with save_dir set to a "
-            "folder in your working directory; from Cowork, share the research folder with Claude."
+            "Tip: in Claude Code on this computer, pass save_dir (a folder in your working directory) to publish it "
+            "with an artifact; a doc takes it as an asset upload from here. In a claude.ai, phone or Cowork session, "
+            "the research folder must be a connected folder (the desktop app's Add folder, or "
+            "device_request_folder_access, which the user approves): then the file is at the device path, and "
+            "device_stage_files brings it over."
         )
     return "\n".join(lines)
 

@@ -10,9 +10,17 @@ Server [MCP](https://modelcontextprotocol.io) lokal yang memberi Claude alat unt
 
 Connector ini melengkapi browser bawaan Claude, bukan menggantikannya: browser untuk melihat dan menjelajah, connector untuk membaca teks dengan hemat token dan membawa file (terutama gambar) ke laptop, artifact, dan doc.
 
-### Gambar ke artifact
+### Gambar ke artifact dan doc
 
-Sesi Claude Code hanya bisa mempublikasikan file yang ada di bawah folder kerjanya. Jadi daftarkan folder proyek di `RESEARCH_MCP_SAVE_DIRS`, lalu Claude memanggil `download_file` dengan `save_dir` di dalam folder kerja sesi itu. Gambar langsung bisa dipublikasikan bersama halaman artifact (path relatif), tanpa disalin dulu. SHA-256 di hasil `download_file` dipakai untuk mengecek file yang terpublikasi identik.
+Jalurnya tergantung di mana Claude berjalan. SHA-256 di hasil `download_file` dipakai untuk mengecek file yang sampai di tujuan identik.
+
+| Sesi | Simpan dengan | Lalu |
+|---|---|---|
+| Claude Code di komputer ini, untuk artifact HTML | `download_file` + `save_dir` di dalam folder kerja sesi (folder itu harus ada di `RESEARCH_MCP_SAVE_DIRS`) | publikasikan bersama halaman (path relatif); artifact hanya menerima file dari folder kerja |
+| Claude Code di komputer ini, untuk Claude Docs | `download_file` biasa | unggah sebagai aset doc langsung dari folder riset, catat sebagai blob, pasang `![alt](blob/<id>)` |
+| claude.ai, HP, atau Cowork | `download_file` biasa | folder riset harus jadi *connected folder* (tombol Add folder di app desktop, atau Claude meminta lewat `device_request_folder_access` dan kamu menyetujuinya). File lalu ada di `$HOME/mnt/research-files/...` di VM desktop (baris `device path` di hasil), dan `device_stage_files` membawanya ke sesi |
+
+Izin folder untuk sesi jarak jauh terpisah dari izin connector: menyambungkan folder tidak memberi akses ke connector, dan sebaliknya.
 
 Alat diagnostik (bisa dimatikan, lihat [Konfigurasi opsional](#konfigurasi-opsional)):
 
@@ -104,7 +112,7 @@ Diatur lewat variabel lingkungan. Pada Claude Desktop, taruh di blok `"env"` pad
 |---|---|
 | `RESEARCH_MCP_CONTACT` | Kontak pribadi (URL atau alamat email) yang ditambahkan ke header `User-Agent`. Kosong secara default dan tidak pernah diisi otomatis. Nilainya dikirim ke setiap situs yang dibaca, jadi isi hanya bila memang diperlukan. |
 | `RESEARCH_MCP_LOG_DIR` | Folder log. Default: `logs/` di folder proyek. Satu file per proses, dihapus otomatis setelah 14 hari. |
-| `RESEARCH_MCP_DOWNLOAD_DIR` | Folder riset tujuan `download_file` (path absolut). Default: `research-files` di folder user, misalnya `C:\Users\<nama>\research-files`. Bagikan folder ini ke Claude (Cowork) agar file hasil unduhan bisa langsung dipakai di artifact atau doc. |
+| `RESEARCH_MCP_DOWNLOAD_DIR` | Folder riset tujuan `download_file` (path absolut). Default: `research-files` di folder user, misalnya `C:\Users\<nama>\research-files`. Untuk sesi claude.ai, HP, atau Cowork, jadikan folder ini *connected folder* (lihat [Gambar ke artifact dan doc](#gambar-ke-artifact-dan-doc)). |
 | `RESEARCH_MCP_SAVE_DIRS` | Folder tambahan (path absolut, dipisah `;` di Windows atau `:` di macOS/Linux) yang boleh dipakai `save_dir`, beserta semua subfolder-nya. Kosong secara default: `save_dir` hanya boleh di dalam folder riset. Contoh: `C:\Users\<nama>\Projects`. Folder ini juga disebut di deskripsi alat agar Claude langsung memilih yang benar. |
 | `RESEARCH_MCP_DIAGNOSTICS` | `on` (default) atau `off`. `off` menyembunyikan alat `spike_*`. |
 
@@ -144,6 +152,7 @@ Perintah kedua menjalankan tes offline; yang ketiga hanya tes yang memakai inter
 
 | Versi | Perubahan |
 |---|---|
+| 0.3.1 | Hasil `download_file` menyebut path file di VM desktop (`$HOME/mnt/research-files/...`) untuk sesi claude.ai, HP, dan Cowork, dan tipsnya menjelaskan connected folder; README memuat tiga jalur gambar (artifact, doc, sesi jarak jauh). |
 | 0.3.0 | `download_file` melaporkan ukuran piksel, format, dan frame gambar (termasuk SVG); parameter `save_dir` dan variabel `RESEARCH_MCP_SAVE_DIRS` untuk menyimpan langsung ke folder proyek yang bisa dipublikasikan. |
 | 0.2.0 | `download_file`; alat diagnostik `spike_image`, `spike_image_structured`, `spike_sleep`; `User-Agent` menyertakan URL proyek; variabel `RESEARCH_MCP_DOWNLOAD_DIR` dan `RESEARCH_MCP_DIAGNOSTICS`. |
 | 0.1.0 | Rilis awal: `search_web` dan `read_webpage`. |

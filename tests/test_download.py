@@ -168,9 +168,18 @@ async def test_non_pictures_have_no_image_line(site, services, folder):
 
 
 @pytest.mark.anyio
-async def test_the_research_folder_tip_points_to_save_dir(site, services, folder):
+async def test_the_research_folder_tip_points_to_save_dir_and_connected_folders(site, services, folder):
     site.add("/cat.png", PICTURE, content_type="image/png")
-    assert "save_dir" in (await download_file(services, site.url("/cat.png"))).splitlines()[-1]
+    tip = (await download_file(services, site.url("/cat.png"))).splitlines()[-1]
+    assert "save_dir" in tip
+    assert "connected folder" in tip and "device_stage_files" in tip
+
+
+@pytest.mark.anyio
+async def test_research_folder_downloads_name_their_device_path(site, services, folder):
+    site.add("/cat.png", PICTURE, content_type="image/png")
+    output = await download_file(services, site.url("/cat.png"), folder="albums/2026")
+    assert "device path (once the research folder is a connected folder): $HOME/mnt/research-files/albums/2026/cat.png" in output
 
 
 @pytest.mark.anyio
@@ -183,6 +192,7 @@ async def test_save_dir_puts_the_file_straight_into_an_allowed_project(site, ser
     assert saved_path(output) == str(saved.resolve())
     assert "relative to save_dir: assets/cat.png" in output
     assert "Tip: publish it with a page from this folder" in output
+    assert "device path" not in output
 
 
 @pytest.mark.anyio

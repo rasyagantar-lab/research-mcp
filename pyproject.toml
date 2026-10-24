@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "research-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "Local MCP server that lets Claude search the web, read web pages and PDFs, and download files."
 readme = "README.md"
 requires-python = ">=3.12"
